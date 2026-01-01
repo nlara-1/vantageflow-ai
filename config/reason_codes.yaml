@@ -1,0 +1,273 @@
+# Reason Code Definitions for VantageFlow AI Credit Scoring
+# Maps SHAP feature contributions to business-friendly adverse action reasons
+# Complies with FCRA Section 615(a) requirements for adverse action notices
+
+# POSITIVE REASON CODES
+# These indicate factors supporting approval/lower risk
+positive_reasons:
+  INCOME_STABILITY_STRONG:
+    code: "P01"
+    description: "Income stability is strong with consistent monthly earnings"
+    long_description: "Your income shows consistent patterns with low variability, indicating stable employment or reliable income sources."
+    features:
+      - income_cv  # Coefficient of variation (low = stable)
+      - income_std
+      - income_trend_3mo
+      - income_trend_6mo
+    conditions:
+      - "income_cv < 0.3"  # Low income volatility
+      - "income_std < avg_monthly_income * 0.2"
+    impact: "positive"
+    shap_direction: "negative"  # Low CV reduces default risk
+    magnitude_thresholds:
+      strong: 0.03
+      moderate: 0.01
+      slight: 0.005
+
+  SAVINGS_BEHAVIOR_POSITIVE:
+    code: "P02"
+    description: "Strong savings behavior with positive cash flow patterns"
+    long_description: "Your account shows consistent savings with income regularly exceeding expenses, demonstrating financial discipline."
+    features:
+      - savings_rate
+      - avg_net_cashflow
+      - expense_income_ratio
+    conditions:
+      - "savings_rate > 0.10"  # Saves >10% of income
+      - "avg_net_cashflow > 0"
+      - "expense_income_ratio < 0.90"
+    impact: "positive"
+    shap_direction: "negative"  # High savings reduces default risk
+    magnitude_thresholds:
+      strong: 0.025
+      moderate: 0.01
+      slight: 0.005
+
+  EXPENSE_MANAGEMENT_GOOD:
+    code: "P03"
+    description: "Disciplined spending with controlled discretionary expenses"
+    long_description: "Your discretionary spending is well-managed, indicating responsible financial behavior and budget discipline."
+    features:
+      - discretionary_pct
+      - spending_volatility
+      - essential_spending_ratio
+    conditions:
+      - "discretionary_pct < 0.30"  # <30% discretionary
+      - "spending_volatility < 0.4"
+    impact: "positive"
+    shap_direction: "negative"  # Low discretionary spending reduces risk
+    magnitude_thresholds:
+      strong: 0.02
+      moderate: 0.01
+      slight: 0.005
+
+  INCOME_GROWTH_POSITIVE:
+    code: "P04"
+    description: "Income showing positive growth trend over recent months"
+    long_description: "Your income has been increasing over the past 3-6 months, indicating career progression or business growth."
+    features:
+      - income_trend_3mo
+      - income_trend_6mo
+      - avg_monthly_income
+    conditions:
+      - "income_trend_3mo > 0"  # Positive slope
+      - "income_trend_6mo > 0"
+    impact: "positive"
+    shap_direction: "negative"  # Growing income reduces risk
+    magnitude_thresholds:
+      strong: 0.02
+      moderate: 0.01
+      slight: 0.005
+
+  FINANCIAL_BUFFER_ADEQUATE:
+    code: "P05"
+    description: "Adequate financial buffer with positive average balance"
+    long_description: "Your account maintains a healthy positive balance, providing a cushion for unexpected expenses."
+    features:
+      - avg_balance
+      - min_balance
+      - max_balance
+    conditions:
+      - "avg_balance > avg_monthly_income * 0.5"  # >50% monthly income
+      - "min_balance > 0"
+    impact: "positive"
+    shap_direction: "negative"  # Higher balance reduces risk
+    magnitude_thresholds:
+      strong: 0.025
+      moderate: 0.01
+      slight: 0.005
+
+  OVERDRAFT_FREE:
+    code: "P06"
+    description: "No overdraft activity with consistently positive balance"
+    long_description: "Your account shows no overdraft incidents, indicating excellent cash flow management."
+    features:
+      - overdraft_count_3mo
+      - overdraft_count_6mo
+      - overdraft_rate
+    conditions:
+      - "overdraft_count_3mo == 0"
+      - "overdraft_count_6mo == 0"
+      - "overdraft_rate < 0.05"
+    impact: "positive"
+    shap_direction: "negative"  # No overdrafts reduces risk
+    magnitude_thresholds:
+      strong: 0.03
+      moderate: 0.015
+      slight: 0.008
+
+# NEGATIVE REASON CODES (Adverse Action Reasons)
+# These indicate factors requiring attention/causing denial
+negative_reasons:
+  INCOME_VOLATILITY_HIGH:
+    code: "N01"
+    description: "Income volatility is higher than typical"
+    long_description: "Your income shows significant month-to-month variation, indicating irregular income patterns that may affect repayment ability."
+    features:
+      - income_cv  # Coefficient of variation (high = volatile)
+      - income_std
+      - income_frequency_days
+    conditions:
+      - "income_cv > 0.5"  # High income volatility
+      - "income_std > avg_monthly_income * 0.3"
+    impact: "negative"
+    shap_direction: "positive"  # High CV increases default risk
+    magnitude_thresholds:
+      strong: 0.03
+      moderate: 0.01
+      slight: 0.005
+    regulatory_note: "FCRA compliant - income stability is a permissible consideration"
+
+  OVERDRAFT_FREQUENT:
+    code: "N02"
+    description: "Frequent overdraft activity detected in recent months"
+    long_description: "Your account has experienced multiple overdraft incidents, suggesting cash flow management challenges."
+    features:
+      - overdraft_count_3mo
+      - overdraft_count_6mo
+      - overdraft_rate
+    conditions:
+      - "overdraft_count_3mo > 1"
+      - "overdraft_rate > 0.10"
+    impact: "negative"
+    shap_direction: "positive"  # More overdrafts increase risk
+    magnitude_thresholds:
+      strong: 0.035
+      moderate: 0.02
+      slight: 0.01
+    regulatory_note: "FCRA compliant - payment history consideration"
+
+  NEGATIVE_CASHFLOW_PERSISTENT:
+    code: "N03"
+    description: "Persistent negative cash flow with expenses exceeding income"
+    long_description: "Your expenses consistently exceed your income, indicating potential difficulty meeting additional payment obligations."
+    features:
+      - avg_net_cashflow
+      - savings_rate
+      - expense_income_ratio
+    conditions:
+      - "avg_net_cashflow < 0"
+      - "savings_rate < 0"
+      - "expense_income_ratio > 1.0"
+    impact: "negative"
+    shap_direction: "positive"  # Negative cashflow increases risk
+    magnitude_thresholds:
+      strong: 0.03
+      moderate: 0.015
+      slight: 0.008
+    regulatory_note: "FCRA compliant - debt-to-income consideration"
+
+  INCOME_INSUFFICIENT:
+    code: "N04"
+    description: "Income level insufficient relative to obligations"
+    long_description: "Your reported income may not adequately support your current expense levels and additional credit obligations."
+    features:
+      - avg_monthly_income
+      - income_to_spending_stability_ratio
+      - expense_income_ratio
+    conditions:
+      - "avg_monthly_income < 2000"  # Below threshold
+      - "expense_income_ratio > 0.95"
+    impact: "negative"
+    shap_direction: "positive"  # Lower income increases risk
+    magnitude_thresholds:
+      strong: 0.025
+      moderate: 0.012
+      slight: 0.006
+    regulatory_note: "FCRA compliant - income verification permitted"
+
+  EXPENSE_CONTROL_WEAK:
+    code: "N05"
+    description: "High discretionary spending relative to income"
+    long_description: "Your discretionary spending represents a high proportion of total expenses, suggesting limited financial flexibility."
+    features:
+      - discretionary_pct
+      - spending_volatility
+      - avg_monthly_spending
+    conditions:
+      - "discretionary_pct > 0.40"  # >40% discretionary
+      - "spending_volatility > 0.6"
+    impact: "negative"
+    shap_direction: "positive"  # High discretionary spending increases risk
+    magnitude_thresholds:
+      strong: 0.02
+      moderate: 0.01
+      slight: 0.005
+    regulatory_note: "FCRA compliant - spending pattern analysis"
+
+  FINANCIAL_BUFFER_MINIMAL:
+    code: "N06"
+    description: "Limited financial reserves with low account balances"
+    long_description: "Your account maintains minimal reserves, leaving little cushion for unexpected expenses or income disruption."
+    features:
+      - avg_balance
+      - min_balance
+      - overdraft_rate
+    conditions:
+      - "avg_balance < avg_monthly_income * 0.2"  # <20% monthly income
+      - "min_balance < 0"
+    impact: "negative"
+    shap_direction: "positive"  # Lower balance increases risk
+    magnitude_thresholds:
+      strong: 0.03
+      moderate: 0.015
+      slight: 0.008
+    regulatory_note: "FCRA compliant - financial capacity consideration"
+
+# MAGNITUDE DEFINITIONS
+# Defines how to interpret SHAP value magnitudes
+magnitude_levels:
+  strong:
+    description: "Significant impact on credit decision"
+    min_contribution: 0.025  # Default threshold
+  moderate:
+    description: "Moderate impact on credit decision"
+    min_contribution: 0.01
+  slight:
+    description: "Minor impact on credit decision"
+    min_contribution: 0.005
+
+# ADVERSE ACTION NOTICE TEMPLATE
+adverse_action_notice:
+  header: "Adverse Action Notice - Credit Decision Factors"
+  regulatory_statement: |
+    This notice is provided in compliance with the Fair Credit Reporting Act (FCRA)
+    Section 615(a). The following factors were considered in your credit decision.
+
+    These reasons are based on analysis of your transaction patterns and financial
+    behavior. They represent the most significant factors that affected your credit
+    evaluation, listed in order of impact.
+
+  footer: |
+    If you have questions about this decision or believe any information is inaccurate,
+    please contact us. You may also request a free copy of your credit report and file
+    a dispute if you believe information is incorrect.
+
+    This decision was made using alternative credit data and does not consider traditional
+    credit bureau information unless specifically disclosed.
+
+# VERSION CONTROL
+version: "1.0.0"
+last_updated: "2024-01-01"
+approved_by: "Compliance Team"
+regulatory_framework: "FCRA Section 615(a), Regulation B"
