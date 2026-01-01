@@ -1,0 +1,206 @@
+# Feature Configuration for VantageFlow AI Credit Scoring
+# Defines prohibited features, high-risk proxies, and allowed behavioral features
+# to ensure compliance with fair lending regulations and ethical AI principles
+
+# STRICTLY PROHIBITED FEATURES
+# These features are NEVER allowed in the model under any circumstances
+# Using these features violates fair lending laws (ECOA, Fair Housing Act)
+prohibited_features:
+  # Protected characteristics under ECOA
+  - race
+  - ethnicity
+  - color
+  - national_origin
+  - religion
+  - sex
+  - gender
+  - gender_identity
+  - sexual_orientation
+  - marital_status
+  - age  # Age is prohibited except for elderly applicants (62+) for favorable treatment
+
+  # Additional protected characteristics
+  - disability_status
+  - veteran_status
+  - familial_status
+  - number_of_children
+  - pregnancy_status
+  - political_affiliation
+
+  # Direct identifiers (PII)
+  - ssn
+  - social_security_number
+  - drivers_license
+  - passport_number
+  - borrower_name
+  - first_name
+  - last_name
+  - full_name
+  - email
+  - phone_number
+  - address
+  - street_address
+
+  # Demographic identifiers from borrower profile
+  # NOTE: These are used ONLY for fairness testing, never as model features
+  - borrower_age
+  - borrower_gender
+  - borrower_ethnicity
+  - borrower_race
+
+# HIGH-RISK PROXY FEATURES
+# These features may be correlated with protected characteristics
+# Require additional scrutiny and fairness testing before use
+high_risk_proxies:
+  - zip_code  # Geographic proxy for race/ethnicity
+  - postal_code
+  - neighborhood
+  - census_tract
+  - geographic_region
+  - city
+  - county
+  - state  # Some states have demographic concentrations
+
+  # Education-related (may correlate with protected classes)
+  - education_level
+  - school_name
+  - university_name
+
+  # Employment-related (may have disparate impact)
+  - employer_name
+  - industry
+  - occupation_title
+  - job_title
+
+  # Language preference (may proxy for national origin)
+  - language_preference
+  - primary_language
+
+  # Name-derived features (may proxy for ethnicity/national origin)
+  - name_length
+  - name_origin
+  - surname
+
+# ALLOWED BEHAVIORAL FEATURES
+# These features are based on financial behavior and are permissible
+# All features must be derived from transaction history or credit behavior
+allowed_features:
+  # Income features (behavior-based)
+  - avg_monthly_income
+  - income_std
+  - income_cv
+  - income_trend_3mo
+  - income_trend_6mo
+  - income_frequency_days
+  - min_monthly_income
+  - max_monthly_income
+
+  # Spending features (behavior-based)
+  - avg_monthly_spending
+  - spending_std
+  - discretionary_pct
+  - expense_income_ratio
+  - savings_rate
+  - spending_trend_3mo
+  - spending_trend_6mo
+  - spending_volatility
+
+  # Financial health (behavior-based)
+  - avg_balance
+  - min_balance
+  - max_balance
+  - overdraft_count_3mo
+  - overdraft_count_6mo
+  - overdraft_rate
+  - avg_net_cashflow
+
+  # Temporal patterns (behavior-based)
+  - transaction_count_per_month
+  - days_since_last_transaction
+  - transaction_count_total
+  - months_of_history
+  - income_transaction_count
+  - expense_transaction_count
+
+  # Category spending (behavior-based)
+  - rent_to_income_ratio
+  - utilities_to_income_ratio
+  - groceries_to_income_ratio
+  - transportation_to_income_ratio
+  - essential_spending_ratio
+
+  # Derived features (behavior-based)
+  - income_to_spending_stability_ratio
+  - avg_transaction_size
+  - large_transaction_pct
+  - weekend_spending_pct
+  - financial_health_score
+
+  # Additional transaction-based features
+  - payment_regularity
+  - bill_payment_timeliness
+  - account_age_days
+  - transaction_diversity
+
+# CORRELATION THRESHOLDS
+# Maximum allowed correlation between features and protected attributes
+correlation_thresholds:
+  # Strict threshold for direct correlation with protected attributes
+  protected_attribute_correlation: 0.30  # Flag if |correlation| > 0.30
+
+  # Warning threshold for moderate correlation
+  warning_threshold: 0.20  # Warn if |correlation| > 0.20
+
+  # Threshold for feature-to-feature multicollinearity
+  feature_multicollinearity: 0.90  # Flag if |correlation| > 0.90
+
+# FAIRNESS METRICS REQUIREMENTS
+# Minimum standards for model fairness across protected groups
+fairness_requirements:
+  # Disparate impact ratio (approval rate ratio)
+  # Must be between 0.8 and 1.25 (80% rule)
+  min_disparate_impact_ratio: 0.80
+  max_disparate_impact_ratio: 1.25
+
+  # Maximum difference in false positive rates across groups
+  max_fpr_difference: 0.10  # 10 percentage points
+
+  # Maximum difference in false negative rates across groups
+  max_fnr_difference: 0.10  # 10 percentage points
+
+  # Statistical significance threshold for bias testing
+  bias_test_p_value: 0.05
+
+# DOCUMENTATION REQUIREMENTS
+# Required information for each feature used in the model
+documentation_requirements:
+  - feature_name
+  - description
+  - data_source
+  - calculation_method
+  - business_justification
+  - fairness_assessment
+  - correlation_with_protected_attributes
+  - approval_date
+  - reviewer
+
+# AUDIT TRAIL
+# Configuration for feature audit logging
+audit_settings:
+  # Log all feature validation attempts
+  log_validations: true
+
+  # Require manual approval for high-risk proxy features
+  require_approval_for_proxies: true
+
+  # Retention period for audit logs (days)
+  audit_retention_days: 2555  # 7 years (regulatory compliance)
+
+  # Automatically flag features with high correlation to protected attributes
+  auto_flag_high_correlation: true
+
+# VERSION CONTROL
+version: "1.0.0"
+last_updated: "2024-01-01"
+approved_by: "Compliance Team"
+next_review_date: "2024-07-01"
