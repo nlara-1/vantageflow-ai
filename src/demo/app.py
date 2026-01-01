@@ -27,7 +27,6 @@ import joblib
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
-# Import VantageFlow modules
 # from src.data.database import SessionLocal, Borrower, Transaction
 from src.explainability.shap_engine import SHAPExplainer
 from src.explainability.reason_codes import ReasonCodeGenerator
@@ -286,6 +285,208 @@ def calculate_trend(series: pd.Series, window: int) -> float:
 
     slope = numerator / denominator
     return slope
+
+
+def detect_input_type(df: pd.DataFrame) -> str:
+    """
+    Detect if uploaded data is raw transactions or pre-computed features.
+
+    Args:
+        df: Input DataFrame
+
+    Returns:
+        'transactions', 'features', or 'unknown'
+    """
+    columns_lower = [col.lower() for col in df.columns]
+
+    # Check for transaction indicators (more flexible)
+    date_indicators = ['date', 'transaction_date', 'txn_date', 'trans_date']
+    amount_indicators = ['amount', 'debit', 'credit']
+    id_indicators = ['borrower_id', 'user_id', 'customer_id', 'account_id', 'id', 'borrower', 'user']
+
+    has_date = any(any(ind in col for ind in date_indicators) for col in columns_lower)
+    has_amount = any(any(ind in col for ind in amount_indicators) for col in columns_lower)
+    has_id = any(any(ind in col for ind in id_indicators) for col in columns_lower)
+
+    # Check for feature indicators (also flexible)
+    feature_indicators = ['income', 'spending', 'savings', 'overdraft', 'balance', 'transaction_count', 'volatility']
+    feature_count = sum(1 for col in columns_lower if any(ind in col for ind in feature_indicators))
+
+    # Decision logic
+    if has_date and has_amount:
+        # Looks like transactions
+        return 'transactions'
+    elif feature_count >= 3:
+        # Looks like pre-computed features (has at least 3 feature-like columns)
+        return 'features'
+    elif len(df.columns) > 10 and not has_date:
+        # Many columns but no date - probably features
+        return 'features'
+    else:
+        return 'unknown'
+
+
+def similar_enough(expected: str, actual: str) -> bool:
+    """
+    Check if column names are similar enough to be considered a match.
+
+    Args:
+        expected: Expected column name
+        actual: Actual column name from CSV
+
+    Returns:
+        True if names are similar enough
+    """
+    expected_lower = expected.lower().replace('_', '').replace('-', '')
+    actual_lower = actual.lower().replace('_', '').replace('-', '')
+
+    # Direct match
+    if expected_lower == actual_lower:
+        return True
+
+    # Check if one contains the other
+    if expected_lower in actual_lower or actual_lower in expected_lower:
+        return True
+
+    # Keywords match (e.g., both contain 'income' and 'avg')
+    expected_words = set(expected.lower().split('_'))
+    actual_words = set(actual.lower().split('_'))
+
+    # Require at least 2 words in common for multi-word features
+    if len(expected_words) >= 2:
+        return len(expected_words & actual_words) >= 2
+
+    # For single-word features, require exact match or containment
+    return expected_lower == actual_lower or expected_lower in actual_lower
+
+
+def smart_map_columns(df: pd.DataFrame, required_features: List[str]) -> Dict[str, str]:
+    """
+    Auto-map similar column names to expected features.
+
+    Args:
+        df: Input DataFrame
+        required_features: List of required feature names
+
+    Returns:
+        Dictionary mapping required feature names to actual column names
+    """
+    mapping = {}
+
+    for required in required_features:
+        # First try exact match
+        if required in df.columns:
+            mapping[required] = required
+            continue
+
+        # Try fuzzy matching
+        for col in df.columns:
+            if similar_enough(required, col):
+                mapping[required] = col
+                break
+
+    return mapping
+
+
+def normalize_transactions(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Handle different transaction data formats.
+
+    Args:
+        df: Raw transaction DataFrame
+
+    Returns:
+        Normalized transaction DataFrame
+    """
+    df = df.copy()
+
+    # Handle debit/credit columns
+    if 'debit' in df.columns and 'credit' in df.columns:
+        # Credit is positive (income), debit is negative (expenses)
+        df['amount'] = df['credit'].fillna(0) - df['debit'].fillna(0)
+
+    # Handle date formats
+    date_columns = ['transaction_date', 'date', 'txn_date', 'trans_date']
+    for date_col in date_columns:
+        if date_col in df.columns:
+            try:
+                df['transaction_date'] = pd.to_datetime(df[date_col], infer_datetime_format=True)
+                break
+            except Exception:
+                continue
+
+    # Handle category variations
+    if 'category' not in df.columns:
+        category_candidates = ['type', 'transaction_type', 'txn_category', 'merchant_category']
+        for cat_col in category_candidates:
+            if cat_col in df.columns:
+                df['category'] = df[cat_col]
+                break
+
+        # If still no category, create a default one
+        if 'category' not in df.columns:
+            df['category'] = df['amount'].apply(lambda x: 'INCOME' if x > 0 else 'EXPENSE')
+
+    # Handle borrower_id variations
+    if 'borrower_id' not in df.columns:
+        id_candidates = ['user_id', 'customer_id', 'account_id', 'borrower', 'id']
+        for id_col in id_candidates:
+            if id_col in df.columns:
+                df['borrower_id'] = df[id_col]
+                break
+
+        # If still no borrower_id, create a default one
+        if 'borrower_id' not in df.columns:
+            df['borrower_id'] = 'BORROWER_001'
+
+    return df
+
+
+def validate_data(df: pd.DataFrame, input_type: str) -> List[str]:
+    """
+    Validate uploaded data quality.
+
+    Args:
+        df: Input DataFrame
+        input_type: Type of input ('transactions' or 'features')
+
+    Returns:
+        List of validation issues (empty if no issues)
+    """
+    issues = []
+
+    if input_type == 'transactions':
+        # Check minimum data
+        if len(df) < 20:
+            issues.append("⚠️ Very few transactions (< 20). Results may be unreliable.")
+
+        # Check time range
+        if 'transaction_date' in df.columns:
+            try:
+                date_range = (df['transaction_date'].max() - df['transaction_date'].min()).days
+                if date_range < 90:
+                    issues.append("⚠️ Less than 3 months of data. Minimum 3 months recommended.")
+                elif date_range < 180:
+                    issues.append("ℹ️ Less than 6 months of data. 6-12 months recommended for best results.")
+            except Exception:
+                issues.append("⚠️ Could not parse transaction dates.")
+
+        # Check for income transactions
+        if 'amount' in df.columns:
+            if (df['amount'] > 0).sum() == 0:
+                issues.append("❌ No income transactions found. Cannot score without income data.")
+
+            # Check for expense transactions
+            if (df['amount'] < 0).sum() == 0:
+                issues.append("⚠️ No expense transactions found. Scoring may be less accurate.")
+
+    elif input_type == 'features':
+        # Check for missing values
+        missing_pct = df.isnull().sum().sum() / (len(df) * len(df.columns))
+        if missing_pct > 0.1:
+            issues.append(f"⚠️ High proportion of missing values ({missing_pct*100:.1f}%).")
+
+    return issues
 
 
 # Page configuration
@@ -1028,9 +1229,12 @@ def render_score_borrower_page():
 
     with col1:
         uploaded_file = st.file_uploader(
-            "Upload Transaction CSV",
+            "Upload Transaction CSV or Features CSV",
             type=['csv'],
-            help="CSV file with columns: borrower_id, transaction_date, amount, category"
+            help="""Upload either:
+            • Raw transactions (borrower_id, transaction_date, amount, category)
+            • Pre-computed features (avg_monthly_income, income_cv, etc.)
+            Column variations are auto-detected (e.g., 'date', 'debit/credit')"""
         )
 
     with col2:
@@ -1049,28 +1253,196 @@ def render_score_borrower_page():
             # Read file
             df = pd.read_csv(uploaded_file)
 
-            # Validate
-            is_valid, error_msg = validate_transaction_file(df)
+            # Detect input type
+            input_type = detect_input_type(df)
 
-            if not is_valid:
-                st.error(f"❌ Invalid file: {error_msg}")
+            if input_type == 'unknown':
+                st.error("❌ Could not detect data format. Please ensure your CSV has either:")
+                st.write("- **Raw transactions:** columns 'transaction_date', 'amount', 'borrower_id'")
+                st.write("- **Pre-computed features:** columns matching model features (e.g., 'avg_monthly_income', 'income_cv')")
+                st.info("💡 You can also use variations like 'date'/'txn_date' for transaction_date, or 'debit'/'credit' for amounts")
                 return
 
-            # Show file preview
-            with st.expander("📄 View Uploaded Data", expanded=False):
-                st.dataframe(df.head(20), use_container_width=True)
-                st.caption(f"Total rows: {len(df)}")
+            # Process based on input type
+            if input_type == 'transactions':
+                st.info("📝 Raw transactions detected - will extract features automatically")
+
+                # Normalize transaction format
+                df = normalize_transactions(df)
+
+                # Validate data quality
+                issues = validate_data(df, input_type)
+
+                if issues:
+                    for issue in issues:
+                        if issue.startswith('❌'):
+                            st.error(issue)
+                        elif issue.startswith('⚠️'):
+                            st.warning(issue)
+                        else:
+                            st.info(issue)
+
+                    # Stop if there are critical errors
+                    if any(issue.startswith('❌') for issue in issues):
+                        return
+
+                # Show file preview
+                with st.expander("📄 View Uploaded Data", expanded=False):
+                    st.dataframe(df.head(20), use_container_width=True)
+                    st.caption(f"Total rows: {len(df)} | Date range: {df['transaction_date'].min()} to {df['transaction_date'].max()}")
+
+                # Store processed dataframe for scoring
+                st.session_state['processed_df'] = df
+                st.session_state['input_type'] = 'transactions'
+
+            elif input_type == 'features':
+                st.info("✓ Pre-computed features detected")
+
+                # Get model's expected features
+                model_features = model.model.get_booster().feature_names
+
+                # Auto-map columns
+                mapping = smart_map_columns(df, model_features)
+
+                # Check for unmapped columns
+                unmapped = [f for f in model_features if f not in mapping]
+
+                if unmapped:
+                    st.warning(f"⚠️ Could not auto-map {len(unmapped)} columns. Please map manually below:")
+
+                    with st.expander("🔧 Manual Column Mapping", expanded=True):
+                        st.markdown("**Map the required features to columns in your CSV:**")
+
+                        # Initialize session state for mappings if not exists
+                        if 'column_mappings' not in st.session_state:
+                            st.session_state['column_mappings'] = {}
+
+                        for required_col in unmapped:
+                            selected = st.selectbox(
+                                f"Map '{required_col}' to:",
+                                options=['(skip)'] + list(df.columns),
+                                key=f"map_{required_col}",
+                                help=f"Select a column from your CSV that represents {required_col}"
+                            )
+                            if selected != '(skip)':
+                                mapping[required_col] = selected
+
+                    # Show successfully mapped columns
+                    if mapping:
+                        with st.expander("✅ Successfully Mapped Columns", expanded=False):
+                            mapping_df = pd.DataFrame([
+                                {'Required Feature': k, 'Mapped to CSV Column': v}
+                                for k, v in mapping.items()
+                            ])
+                            st.dataframe(mapping_df, use_container_width=True, hide_index=True)
+
+                # Apply mapping and create features dataframe
+                features_df = pd.DataFrame()
+                for expected, actual in mapping.items():
+                    if actual in df.columns:
+                        features_df[expected] = df[actual]
+
+                # Add missing features with zeros
+                for feature in model_features:
+                    if feature not in features_df.columns:
+                        features_df[feature] = 0.0
+
+                # Validate data quality
+                issues = validate_data(features_df, input_type)
+                for issue in issues:
+                    if issue.startswith('⚠️'):
+                        st.warning(issue)
+                    else:
+                        st.info(issue)
+
+                # Show file preview
+                with st.expander("📄 View Uploaded Data", expanded=False):
+                    st.dataframe(df.head(20), use_container_width=True)
+                    st.caption(f"Total rows: {len(df)} | Mapped columns: {len(mapping)}/{len(model_features)}")
+
+                # Store for scoring
+                st.session_state['processed_df'] = features_df
+                st.session_state['input_type'] = 'features'
 
             # Score button
             if st.button("🎯 Score Borrower", type="primary", use_container_width=True):
                 with st.spinner("Analyzing transaction patterns..."):
                     try:
-                        # Score borrower
-                        result = score_borrower(df, model, explainer)
+                        processed_df = st.session_state.get('processed_df', df)
+                        input_type = st.session_state.get('input_type', 'transactions')
+
+                        if input_type == 'transactions':
+                            # Score borrower from transactions
+                            result = score_borrower(processed_df, model, explainer)
+                        else:
+                            # Score borrower from pre-computed features
+                            # Prepare feature matrix
+                            model_features = model.model.get_booster().feature_names
+                            X = processed_df[model_features].iloc[0:1]
+
+                            # Predict
+                            y_pred_proba = model.predict_proba(X)[0, 1]
+                            score = int(y_pred_proba * 1000)
+
+                            # Determine risk tier
+                            if score >= 700:
+                                risk_tier = "LOW"
+                            elif score >= 600:
+                                risk_tier = "MEDIUM"
+                            elif score >= 500:
+                                risk_tier = "HIGH"
+                            else:
+                                risk_tier = "VERY HIGH"
+
+                            # Get SHAP explanations
+                            reason_codes = []
+                            shap_values_dict = {}
+
+                            if explainer:
+                                try:
+                                    explanation = explainer.get_explanation(X, return_dict=True)
+                                    shap_values_dict = dict(zip(
+                                        explanation['feature_names'],
+                                        explanation['shap_values']
+                                    ))
+
+                                    # Generate reason codes
+                                    generator = ReasonCodeGenerator()
+                                    reason_code_objs = generator.generate_reason_codes(
+                                        shap_values_dict,
+                                        explanation['feature_values'],
+                                        top_n=6
+                                    )
+
+                                    # Convert to dicts
+                                    reason_codes = [
+                                        {
+                                            'code': rc.code,
+                                            'name': rc.name,
+                                            'description': rc.description,
+                                            'long_description': rc.long_description,
+                                            'impact': rc.impact,
+                                            'magnitude': rc.magnitude,
+                                            'contribution': rc.contribution,
+                                            'features': rc.features
+                                        }
+                                        for rc in reason_code_objs
+                                    ]
+                                except Exception as e:
+                                    st.warning(f"Could not generate explanations: {str(e)}")
+
+                            result = {
+                                'score': score,
+                                'probability': y_pred_proba,
+                                'risk_tier': risk_tier,
+                                'reason_codes': reason_codes,
+                                'features': X.iloc[0].to_dict(),
+                                'shap_values': shap_values_dict
+                            }
 
                         # Store in session state
                         st.session_state['score_result'] = result
-                        st.session_state['transactions_df'] = df
+                        st.session_state['transactions_df'] = processed_df
 
                         st.success("✅ Scoring complete!")
 
