@@ -1,0 +1,35 @@
+{
+  "model_type": "xgboost",
+  "training_date": "2026-01-01T06:34:41.977859",
+  "best_metric": "auc",
+  "best_score": 1.0,
+  "test_metrics": {
+    "auc": 1.0,
+    "accuracy": 1.0,
+    "precision": 1.0,
+    "recall": 1.0,
+    "f1": 1.0,
+    "confusion_matrix": [
+      [
+        120,
+        0
+      ],
+      [
+        0,
+        30
+      ]
+    ]
+  },
+  "random_state": 42,
+  "best_params": {
+    "subsample": 0.6,
+    "reg_lambda": 1,
+    "reg_alpha": 0,
+    "n_estimators": 200,
+    "min_child_weight": 5,
+    "max_depth": 3,
+    "learning_rate": 0.01,
+    "gamma": 0.3,
+    "colsample_bytree": 0.6
+  }
+}
