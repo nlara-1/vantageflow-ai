@@ -99,7 +99,7 @@ class SHAPExplainer:
                     self.explainer = shap.TreeExplainer(
                         self.model,
                         data=self.background_df,
-                        feature_perturbation="tree_path_dependent"
+                        feature_perturbation="interventional"
                     )
                     print("✓ Using TreeExplainer (optimized for tree-based models)")
                     return

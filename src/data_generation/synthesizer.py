@@ -212,7 +212,7 @@ class TransactionSynthesizer:
 
         # Generate weekly payments (every Friday)
         days_until_friday = (4 - current_date.weekday()) % 7
-        friday = current_date + timedelta(days=days_until_friday)
+        friday = current_date + timedelta(days=int(days_until_friday))
 
         while friday < month_end and friday < self.end_date:
             if friday >= self.start_date:
@@ -233,7 +233,7 @@ class TransactionSynthesizer:
         for _ in range(num_payments):
             # Random day in month
             day_offset = np.random.randint(0, 30)
-            payment_date = month_start + timedelta(days=day_offset)
+            payment_date = month_start + timedelta(days=int(day_offset))
 
             if payment_date >= self.start_date and payment_date < self.end_date:
                 # Variable amount (±40% of average monthly income / num_payments)
@@ -274,7 +274,7 @@ class TransactionSynthesizer:
                 if rent_date >= self.start_date and rent_date < self.end_date:
                     # Slight variation (some months paid a day or two late/early)
                     day_variation = np.random.randint(-2, 3)
-                    actual_date = rent_date + timedelta(days=day_variation)
+                    actual_date = rent_date + timedelta(days=int(day_variation))
 
                     self._add_transaction(
                         actual_date,
@@ -385,7 +385,7 @@ class TransactionSynthesizer:
                     day_of_week = np.random.randint(0, 7)
 
                 days_offset = week * 7 + day_of_week
-                grocery_date = current_date + timedelta(days=days_offset)
+                grocery_date = current_date + timedelta(days=int(days_offset))
 
                 if grocery_date >= self.start_date and grocery_date < self.end_date:
                     # $50-150 per trip
@@ -409,7 +409,7 @@ class TransactionSynthesizer:
 
             for _ in range(num_transactions):
                 day_offset = np.random.randint(0, 30)
-                trans_date = current_date + timedelta(days=day_offset)
+                trans_date = current_date + timedelta(days=int(day_offset))
 
                 if trans_date >= self.start_date and trans_date < self.end_date:
                     # $20-80 per transaction
@@ -439,7 +439,7 @@ class TransactionSynthesizer:
 
             for _ in range(num_transactions):
                 day_offset = np.random.randint(0, 30)
-                disc_date = current_date + timedelta(days=day_offset)
+                disc_date = current_date + timedelta(days=int(day_offset))
 
                 if disc_date >= self.start_date and disc_date < self.end_date:
                     # Allocate from monthly discretionary budget
@@ -500,7 +500,7 @@ class TransactionSynthesizer:
 
                 for _ in range(num_purchases):
                     day_offset = np.random.randint(0, 30)
-                    holiday_date = current_date + timedelta(days=day_offset)
+                    holiday_date = current_date + timedelta(days=int(day_offset))
 
                     if holiday_date >= self.start_date and holiday_date < self.end_date:
                         # Holiday purchases $30-200

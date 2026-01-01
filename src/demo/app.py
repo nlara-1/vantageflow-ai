@@ -22,17 +22,271 @@ import numpy as np
 import plotly.graph_objects as go
 import plotly.express as px
 from plotly.subplots import make_subplots
+import joblib
 
 # Add parent directory to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 # Import VantageFlow modules
-from src.data.database import SessionLocal, Borrower, Transaction
-from src.features.engineer import FeatureEngineer
-from src.models.train import load_model, predict_with_model
+# from src.data.database import SessionLocal, Borrower, Transaction
 from src.explainability.shap_engine import SHAPExplainer
 from src.explainability.reason_codes import ReasonCodeGenerator
 from src.reporting.generator import UnderwritingReportGenerator
+from src.models.train import XGBoostModel
+
+
+# Helper functions for model loading and prediction
+def load_model(model_path='models/production/xgboost_model.pkl'):
+    """Load trained XGBoost model"""
+    if os.path.exists(model_path):
+        return joblib.load(model_path)
+    raise FileNotFoundError(f"Model not found at {model_path}")
+
+
+def predict_with_model(model, features):
+    """Make predictions with the model"""
+    if hasattr(model, 'predict_proba'):
+        return model.predict_proba(features)[:, 1]
+    return model.predict(features)
+
+
+def extract_features_from_transactions(transactions_df: pd.DataFrame, borrower_id: str) -> Dict[str, float]:
+    """
+    Extract features from a transactions DataFrame.
+
+    This function replicates the feature extraction logic from FeatureEngineer
+    but works directly with a DataFrame instead of querying the database.
+
+    Args:
+        transactions_df: DataFrame with columns: borrower_id, transaction_date, amount, category
+        borrower_id: Borrower ID for reference
+
+    Returns:
+        Dictionary of extracted features
+    """
+    from datetime import datetime, timedelta
+
+    # Ensure transaction_date is datetime
+    transactions = transactions_df.copy()
+    transactions['transaction_date'] = pd.to_datetime(transactions['transaction_date'])
+
+    # Income features
+    income_txns = transactions[transactions['amount'] > 0].copy()
+    if len(income_txns) > 0:
+        income_txns['month'] = income_txns['transaction_date'].dt.to_period('M')
+        monthly_income = income_txns.groupby('month')['amount'].sum()
+        avg_monthly_income = monthly_income.mean()
+        income_std = monthly_income.std() if len(monthly_income) > 1 else 0.0
+        income_cv = income_std / avg_monthly_income if avg_monthly_income > 0 else 0.0
+        min_monthly_income = monthly_income.min()
+        max_monthly_income = monthly_income.max()
+
+        income_dates = income_txns['transaction_date'].sort_values()
+        if len(income_dates) > 1:
+            income_frequency = (income_dates.max() - income_dates.min()).days / (len(income_dates) - 1)
+        else:
+            income_frequency = 0.0
+
+        income_trend_3mo = calculate_trend(monthly_income, window=3)
+        income_trend_6mo = calculate_trend(monthly_income, window=6)
+    else:
+        avg_monthly_income = income_std = income_cv = 0.0
+        income_trend_3mo = income_trend_6mo = income_frequency = 0.0
+        min_monthly_income = max_monthly_income = 0.0
+
+    # Spending features
+    expense_txns = transactions[transactions['amount'] < 0].copy()
+    if len(expense_txns) > 0:
+        expense_txns['month'] = expense_txns['transaction_date'].dt.to_period('M')
+        monthly_spending = expense_txns.groupby('month')['amount'].apply(lambda x: abs(x.sum()))
+        avg_monthly_spending = monthly_spending.mean()
+        spending_std = monthly_spending.std() if len(monthly_spending) > 1 else 0.0
+        spending_volatility = spending_std / avg_monthly_spending if avg_monthly_spending > 0 else 0.0
+
+        discretionary_categories = ['ENTERTAINMENT', 'DINING', 'SHOPPING']
+        discretionary_spending = abs(
+            expense_txns[expense_txns['category'].isin(discretionary_categories)]['amount'].sum()
+        )
+        total_spending = abs(expense_txns['amount'].sum())
+        discretionary_pct = discretionary_spending / total_spending if total_spending > 0 else 0.0
+
+        total_income = transactions[transactions['amount'] > 0]['amount'].sum()
+        expense_income_ratio = total_spending / total_income if total_income > 0 else 0.0
+        savings_rate = (total_income - total_spending) / total_income if total_income > 0 else 0.0
+
+        spending_trend_3mo = calculate_trend(monthly_spending, window=3)
+        spending_trend_6mo = calculate_trend(monthly_spending, window=6)
+    else:
+        avg_monthly_spending = spending_std = discretionary_pct = 0.0
+        expense_income_ratio = savings_rate = spending_volatility = 0.0
+        spending_trend_3mo = spending_trend_6mo = 0.0
+        total_income = transactions[transactions['amount'] > 0]['amount'].sum()
+
+    # Financial health features
+    transactions_sorted = transactions.sort_values('transaction_date').copy()
+    transactions_sorted['running_balance'] = transactions_sorted['amount'].cumsum()
+
+    avg_balance = transactions_sorted['running_balance'].mean()
+    min_balance = transactions_sorted['running_balance'].min()
+    max_balance = transactions_sorted['running_balance'].max()
+
+    overdraft_periods = (transactions_sorted['running_balance'] < 0).sum()
+    total_periods = len(transactions_sorted)
+    overdraft_rate = overdraft_periods / total_periods if total_periods > 0 else 0.0
+
+    recent_3mo = transactions_sorted['transaction_date'].max() - timedelta(days=90)
+    recent_6mo = transactions_sorted['transaction_date'].max() - timedelta(days=180)
+
+    overdraft_count_3mo = (
+        (transactions_sorted['transaction_date'] >= recent_3mo) &
+        (transactions_sorted['running_balance'] < 0)
+    ).sum()
+
+    overdraft_count_6mo = (
+        (transactions_sorted['transaction_date'] >= recent_6mo) &
+        (transactions_sorted['running_balance'] < 0)
+    ).sum()
+
+    avg_net_cashflow = transactions_sorted['amount'].mean()
+
+    # Temporal features
+    date_range = (transactions['transaction_date'].max() - transactions['transaction_date'].min()).days
+    months_of_history = date_range / 30.0 if date_range > 0 else 0.0
+    transaction_count_total = len(transactions)
+    transaction_count_per_month = transaction_count_total / months_of_history if months_of_history > 0 else 0.0
+    days_since_last = (datetime.now() - transactions['transaction_date'].max()).days
+    income_transaction_count = (transactions['amount'] > 0).sum()
+    expense_transaction_count = (transactions['amount'] < 0).sum()
+
+    # Category features
+    if total_income > 0:
+        expenses = transactions[transactions['amount'] < 0]
+        rent_spending = abs(expenses[expenses['category'] == 'RENT']['amount'].sum())
+        utilities_spending = abs(expenses[expenses['category'] == 'UTILITIES']['amount'].sum())
+        groceries_spending = abs(expenses[expenses['category'] == 'GROCERIES']['amount'].sum())
+        transportation_spending = abs(expenses[expenses['category'] == 'TRANSPORTATION']['amount'].sum())
+        essential_spending = rent_spending + utilities_spending + groceries_spending + transportation_spending
+
+        rent_to_income_ratio = rent_spending / total_income
+        utilities_to_income_ratio = utilities_spending / total_income
+        groceries_to_income_ratio = groceries_spending / total_income
+        transportation_to_income_ratio = transportation_spending / total_income
+        essential_spending_ratio = essential_spending / total_income
+    else:
+        rent_to_income_ratio = utilities_to_income_ratio = groceries_to_income_ratio = 0.0
+        transportation_to_income_ratio = essential_spending_ratio = 0.0
+
+    # Derived features
+    if spending_volatility > 0:
+        income_to_spending_stability_ratio = income_cv / spending_volatility
+    else:
+        income_to_spending_stability_ratio = 0.0
+
+    avg_transaction_size = abs(transactions['amount'].mean())
+    threshold = 2 * avg_transaction_size
+    large_transaction_pct = (abs(transactions['amount']) > threshold).mean()
+
+    transactions['day_of_week'] = transactions['transaction_date'].dt.dayofweek
+    weekend_mask = (transactions['day_of_week'] >= 5) & (transactions['amount'] < 0)
+    weekend_spending = abs(transactions[weekend_mask]['amount'].sum())
+    total_spending = abs(transactions[transactions['amount'] < 0]['amount'].sum())
+    weekend_spending_pct = weekend_spending / total_spending if total_spending > 0 else 0.0
+
+    financial_health_score = (
+        (savings_rate * 0.4) +
+        ((1 - income_cv) * 0.3) +
+        ((1 - spending_volatility) * 0.2) +
+        ((1 - overdraft_rate) * 0.1)
+    ) * 100
+
+    # Return all features
+    return {
+        # Income features
+        'avg_monthly_income': float(avg_monthly_income),
+        'income_std': float(income_std),
+        'income_cv': float(income_cv),
+        'income_trend_3mo': float(income_trend_3mo),
+        'income_trend_6mo': float(income_trend_6mo),
+        'income_frequency_days': float(income_frequency),
+        'min_monthly_income': float(min_monthly_income),
+        'max_monthly_income': float(max_monthly_income),
+
+        # Spending features
+        'avg_monthly_spending': float(avg_monthly_spending),
+        'spending_std': float(spending_std),
+        'discretionary_pct': float(discretionary_pct),
+        'expense_income_ratio': float(expense_income_ratio),
+        'savings_rate': float(savings_rate),
+        'spending_trend_3mo': float(spending_trend_3mo),
+        'spending_trend_6mo': float(spending_trend_6mo),
+        'spending_volatility': float(spending_volatility),
+
+        # Financial health
+        'avg_balance': float(avg_balance),
+        'min_balance': float(min_balance),
+        'max_balance': float(max_balance),
+        'overdraft_count_3mo': int(overdraft_count_3mo),
+        'overdraft_count_6mo': int(overdraft_count_6mo),
+        'overdraft_rate': float(overdraft_rate),
+        'avg_net_cashflow': float(avg_net_cashflow),
+
+        # Temporal features
+        'transaction_count_per_month': float(transaction_count_per_month),
+        'days_since_last_transaction': int(days_since_last),
+        'transaction_count_total': int(transaction_count_total),
+        'months_of_history': float(months_of_history),
+        'income_transaction_count': int(income_transaction_count),
+        'expense_transaction_count': int(expense_transaction_count),
+
+        # Category features
+        'rent_to_income_ratio': float(rent_to_income_ratio),
+        'utilities_to_income_ratio': float(utilities_to_income_ratio),
+        'groceries_to_income_ratio': float(groceries_to_income_ratio),
+        'transportation_to_income_ratio': float(transportation_to_income_ratio),
+        'essential_spending_ratio': float(essential_spending_ratio),
+
+        # Derived features
+        'income_to_spending_stability_ratio': float(income_to_spending_stability_ratio),
+        'avg_transaction_size': float(avg_transaction_size),
+        'large_transaction_pct': float(large_transaction_pct),
+        'weekend_spending_pct': float(weekend_spending_pct),
+        'financial_health_score': float(financial_health_score),
+    }
+
+
+def calculate_trend(series: pd.Series, window: int) -> float:
+    """
+    Calculate trend (slope) over a rolling window.
+
+    Args:
+        series: Time series data
+        window: Window size
+
+    Returns:
+        Trend slope
+    """
+    if len(series) < window:
+        return 0.0
+
+    recent = series.tail(window).reset_index(drop=True)
+    if len(recent) < 2:
+        return 0.0
+
+    x = np.arange(len(recent))
+    y = recent.values
+
+    x_mean = x.mean()
+    y_mean = y.mean()
+
+    numerator = ((x - x_mean) * (y - y_mean)).sum()
+    denominator = ((x - x_mean) ** 2).sum()
+
+    if denominator == 0:
+        return 0.0
+
+    slope = numerator / denominator
+    return slope
+
 
 # Page configuration
 st.set_page_config(
@@ -271,12 +525,38 @@ def load_model_and_explainer():
 
         model = load_model(model_path)
 
-        # Load background data for SHAP
-        background_path = "data/processed/X_train_sample.csv"
+        # Load background data for SHAP from features.csv
+        background_path = "data/output/features.csv"
         if os.path.exists(background_path):
-            background_df = pd.read_csv(background_path).head(100)
-            explainer = SHAPExplainer(model, background_df)
+            # Load features and sample 100 rows for efficiency
+            features_df = pd.read_csv(background_path)
+
+            # Remove target columns and borrower_id
+            target_cols = ['borrower_id', 'default_label', 'default_probability', 'overall_score']
+            background_df = features_df.drop(columns=[c for c in target_cols if c in features_df.columns])
+
+            # Sample 100 rows for background
+            if len(background_df) > 100:
+                background_df = background_df.sample(n=100, random_state=42)
+
+            # Get model's expected features
+            model_features = model.model.get_booster().feature_names
+
+            # Ensure background has all model features in correct order
+            for col in model_features:
+                if col not in background_df.columns:
+                    background_df[col] = 0.0
+            background_df = background_df[model_features]
+
+            # Create SHAP explainer with interventional mode (more robust)
+            explainer = SHAPExplainer(
+                model.model,
+                background_df,
+                model_type="tree"
+            )
+            print(f"✓ SHAP explainer created with {len(background_df)} background samples")
         else:
+            print(f"⚠ Background data not found at {background_path}")
             explainer = None
 
         return model, explainer, None
@@ -328,7 +608,7 @@ def generate_sample_data() -> pd.DataFrame:
     for i in range(100):
         transactions.append({
             'borrower_id': 'SAMPLE_001',
-            'transaction_date': np.random.choice(dates).strftime('%Y-%m-%d'),
+            'transaction_date': pd.Timestamp(np.random.choice(dates)).strftime('%Y-%m-%d'),
             'amount': round(np.random.uniform(-500, 3000), 2),
             'category': np.random.choice(categories)
         })
@@ -348,14 +628,25 @@ def score_borrower(
         Dictionary with score, risk_tier, reason_codes, features, shap_values
     """
     # Feature engineering
-    feature_engineer = FeatureEngineer()
-    features_df = feature_engineer.engineer_features_from_dataframe(transactions_df)
+    borrower_id = transactions_df['borrower_id'].iloc[0]
+    features = extract_features_from_transactions(transactions_df, borrower_id)
+    features_df = pd.DataFrame([features])
 
     if features_df.empty:
         raise ValueError("Feature engineering failed - no features generated")
 
-    # Get single row of features
-    X = features_df.iloc[0:1]
+    # Get model's expected features
+    model_features = model.model.get_booster().feature_names
+
+    # Prepare feature matrix with all expected features
+    # Add missing columns (like default_probability, overall_score) with zeros
+    X = features_df.copy()
+    for col in model_features:
+        if col not in X.columns:
+            X[col] = 0.0
+
+    # Select features in the model's expected order
+    X = X[model_features]
 
     # Predict
     y_pred_proba = model.predict_proba(X)[0, 1]

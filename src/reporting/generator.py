@@ -64,70 +64,76 @@ class UnderwritingReportGenerator:
         self.styles = getSampleStyleSheet()
 
         # Title style
-        self.styles.add(ParagraphStyle(
-            name='ReportTitle',
-            parent=self.styles['Heading1'],
-            fontSize=24,
-            textColor=self.colors['primary'],
-            spaceAfter=12,
-            alignment=TA_CENTER,
-            fontName='Helvetica-Bold'
-        ))
+        if 'ReportTitle' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='ReportTitle',
+                parent=self.styles['Heading1'],
+                fontSize=24,
+                textColor=self.colors['primary'],
+                spaceAfter=12,
+                alignment=TA_CENTER,
+                fontName='Helvetica-Bold'
+            ))
 
         # Section header style
-        self.styles.add(ParagraphStyle(
-            name='SectionHeader',
-            parent=self.styles['Heading2'],
-            fontSize=14,
-            textColor=self.colors['primary'],
-            spaceAfter=6,
-            spaceBefore=12,
-            fontName='Helvetica-Bold',
-            borderWidth=1,
-            borderColor=self.colors['primary'],
-            borderPadding=4,
-            backColor=self.colors['light_bg']
-        ))
+        if 'SectionHeader' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='SectionHeader',
+                parent=self.styles['Heading2'],
+                fontSize=14,
+                textColor=self.colors['primary'],
+                spaceAfter=6,
+                spaceBefore=12,
+                fontName='Helvetica-Bold',
+                borderWidth=1,
+                borderColor=self.colors['primary'],
+                borderPadding=4,
+                backColor=self.colors['light_bg']
+            ))
 
         # Score display style
-        self.styles.add(ParagraphStyle(
-            name='ScoreDisplay',
-            parent=self.styles['Normal'],
-            fontSize=48,
-            textColor=self.colors['primary'],
-            alignment=TA_CENTER,
-            fontName='Helvetica-Bold'
-        ))
+        if 'ScoreDisplay' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='ScoreDisplay',
+                parent=self.styles['Normal'],
+                fontSize=48,
+                textColor=self.colors['primary'],
+                alignment=TA_CENTER,
+                fontName='Helvetica-Bold'
+            ))
 
         # Score label style
-        self.styles.add(ParagraphStyle(
-            name='ScoreLabel',
-            parent=self.styles['Normal'],
-            fontSize=12,
-            textColor=self.colors['neutral'],
-            alignment=TA_CENTER,
-            fontName='Helvetica'
-        ))
+        if 'ScoreLabel' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='ScoreLabel',
+                parent=self.styles['Normal'],
+                fontSize=12,
+                textColor=self.colors['neutral'],
+                alignment=TA_CENTER,
+                fontName='Helvetica'
+            ))
 
         # Reason code style
-        self.styles.add(ParagraphStyle(
-            name='ReasonCode',
-            parent=self.styles['Normal'],
-            fontSize=11,
-            textColor=colors.black,
-            spaceAfter=4,
-            fontName='Helvetica'
-        ))
+        if 'ReasonCode' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='ReasonCode',
+                parent=self.styles['Normal'],
+                fontSize=11,
+                textColor=colors.black,
+                spaceAfter=4,
+                fontName='Helvetica'
+            ))
 
         # Body text style
-        self.styles.add(ParagraphStyle(
-            name='BodyText',
-            parent=self.styles['Normal'],
-            fontSize=10,
-            textColor=colors.black,
-            spaceAfter=6,
-            fontName='Helvetica'
-        ))
+        if 'BodyText' not in self.styles:
+            self.styles.add(ParagraphStyle(
+                name='BodyText',
+                parent=self.styles['Normal'],
+                fontSize=10,
+                textColor=colors.black,
+                spaceAfter=6,
+                fontName='Helvetica'
+            ))
 
     def generate_report(
         self,
@@ -373,6 +379,9 @@ class UnderwritingReportGenerator:
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
             ('TOPPADDING', (0, 0), (-1, -1), 12),
             ('BOTTOMPADDING', (0, 0), (-1, -1), 12),
+            # Add extra spacing between score number and label
+            ('BOTTOMPADDING', (0, 0), (0, 0), 24),  # More space below score number
+            ('TOPPADDING', (0, 1), (0, 1), 8),      # Space above "Credit Score" label
         ]))
 
         elements.append(score_table)

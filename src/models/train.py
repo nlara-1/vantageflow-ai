@@ -35,7 +35,7 @@ logger = logging.getLogger(__name__)
 
 def split_data(
     features_df: pd.DataFrame,
-    labels_df: pd.DataFrame,
+    labels_df: Optional[pd.DataFrame] = None,
     train_size: float = 0.70,
     val_size: float = 0.15,
     test_size: float = 0.15,
@@ -48,8 +48,8 @@ def split_data(
     and stratified by default label to maintain class distribution.
 
     Args:
-        features_df: Features DataFrame with borrower_id
-        labels_df: Labels DataFrame with borrower_id and default_label
+        features_df: Features DataFrame with borrower_id and default_label
+        labels_df: (Deprecated) Labels DataFrame - default_label should be in features_df
         train_size: Proportion for training set (default 0.70)
         val_size: Proportion for validation set (default 0.15)
         test_size: Proportion for test set (default 0.15)
@@ -59,7 +59,7 @@ def split_data(
         Tuple of (X_train, X_val, X_test, y_train, y_val, y_test)
 
     Raises:
-        ValueError: If sizes don't sum to 1.0 or DataFrames have mismatched borrowers
+        ValueError: If sizes don't sum to 1.0 or default_label column missing
     """
     # Validate sizes
     if not np.isclose(train_size + val_size + test_size, 1.0):
@@ -67,18 +67,8 @@ def split_data(
             f"Split sizes must sum to 1.0, got {train_size + val_size + test_size}"
         )
 
-    # Merge features and labels on borrower_id
-    merged = features_df.merge(
-        labels_df[['borrower_id', 'default_label']],
-        on='borrower_id',
-        how='inner'
-    )
-
-    if len(merged) != len(features_df):
-        logger.warning(
-            f"Feature-label mismatch: {len(features_df)} features, "
-            f"{len(labels_df)} labels, {len(merged)} matched"
-        )
+    # Use features_df directly since it already contains default_label
+    merged = features_df.copy()
 
     # Separate features and labels
     X = merged.drop(columns=['borrower_id', 'default_label'])
@@ -339,7 +329,6 @@ class XGBoostModel:
         fit_params = {}
         if X_val is not None and y_val is not None:
             fit_params['eval_set'] = [(X_val, y_val)]
-            fit_params['early_stopping_rounds'] = 50
             fit_params['verbose'] = False
 
         # Fit
@@ -653,7 +642,7 @@ def main():
     parser.add_argument(
         "--labels-db",
         type=str,
-        default="data/credit_scoring.db",
+        default="data/vantageflow.db",
         help="Path to database with labels"
     )
     parser.add_argument(
@@ -672,22 +661,14 @@ def main():
     args = parser.parse_args()
 
     try:
-        # Load features
+        # Load features (already contains default_label from feature extraction)
         logger.info(f"Loading features from {args.features}")
         features_df = pd.read_csv(args.features)
-        logger.info(f"✓ Loaded {len(features_df)} borrower features")
-
-        # Load labels
-        logger.info(f"Loading labels from {args.labels_db}")
-        from sqlalchemy import create_engine
-        engine = create_engine(f"sqlite:///{args.labels_db}")
-        labels_df = pd.read_sql_query("SELECT borrower_id, default_label FROM labels", engine)
-        logger.info(f"✓ Loaded {len(labels_df)} labels")
+        logger.info(f"✓ Loaded {len(features_df)} borrower features with labels")
 
         # Split data
         X_train, X_val, X_test, y_train, y_val, y_test = split_data(
             features_df,
-            labels_df,
             random_state=args.random_state
         )
 
