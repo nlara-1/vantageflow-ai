@@ -133,16 +133,16 @@ dmypy.json
 cython_debug/
 
 # Project-specific
-# Data directories
-data/
-!data/.gitkeep
+# Data directories (only at root level)
+/data/
+!/data/.gitkeep
 
-# Model directories
-models/
-!models/.gitkeep
-!models/baseline/.gitkeep
-!models/production/.gitkeep
-!models/experiments/.gitkeep
+# Model directories (only at root level)
+/models/
+!/models/.gitkeep
+!/models/baseline/.gitkeep
+!/models/production/.gitkeep
+!/models/experiments/.gitkeep
 
 # Output directories
 output/
