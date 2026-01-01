@@ -489,6 +489,41 @@ def validate_data(df: pd.DataFrame, input_type: str) -> List[str]:
     return issues
 
 
+def convert_to_credit_score(probability: float) -> float:
+    """
+    Convert default probability to 300-850 credit score.
+
+    Args:
+        probability: Default probability (0-1)
+
+    Returns:
+        Credit score (300-850)
+    """
+    # Lower probability = higher score
+    score = 300 + (1 - probability) * 550
+    return max(300, min(850, score))
+
+
+def get_risk_tier(credit_score: float) -> str:
+    """
+    Determine risk tier from credit score.
+
+    Args:
+        credit_score: Credit score (300-850)
+
+    Returns:
+        Risk tier string
+    """
+    if credit_score >= 750:
+        return "EXCELLENT"
+    elif credit_score >= 650:
+        return "GOOD"
+    elif credit_score >= 550:
+        return "MEDIUM"
+    else:
+        return "HIGH"
+
+
 # Page configuration
 st.set_page_config(
     page_title="VantageFlow AI",
@@ -1624,17 +1659,215 @@ def render_batch_analysis_page():
     </div>
     """, unsafe_allow_html=True)
 
-    st.info("🚧 **Coming Soon:** Batch processing of multiple borrowers with CSV output and summary statistics.")
+    # Load model
+    model, explainer, error = load_model_and_explainer()
 
-    st.markdown("""
-    ### Planned Features:
-    - Upload multi-borrower transaction CSV
-    - Parallel processing of all borrowers
-    - Summary statistics (approval rate, average score, risk distribution)
-    - Downloadable results CSV with scores and reason codes
-    - Batch PDF report generation
-    - Portfolio-level fairness analysis
-    """)
+    if error:
+        st.error(f"❌ {error}")
+        st.info("Please train a model first using `python src/models/train.py`")
+        return
+
+    # FILE UPLOAD WITH SAMPLE DATA
+    st.subheader("📤 Upload Multi-Borrower Data")
+    st.info("Upload a CSV with multiple borrowers' features. Each row should be one borrower.")
+
+    # Sample data download button
+    if os.path.exists('data/output/features.csv'):
+        sample_df = pd.read_csv('data/output/features.csv').head(10)
+        sample_csv = sample_df.to_csv(index=False)
+        st.download_button(
+            label="📥 Download Sample Batch File",
+            data=sample_csv,
+            file_name="sample_batch_borrowers.csv",
+            mime="text/csv",
+            help="Download a sample file with 10 borrowers to test batch scoring"
+        )
+
+    uploaded_file = st.file_uploader(
+        "Upload Batch CSV",
+        type=['csv'],
+        key='batch_upload'
+    )
+
+    if uploaded_file:
+        batch_df = pd.read_csv(uploaded_file)
+        st.success(f"✓ Loaded {len(batch_df)} borrowers")
+
+        # Show preview
+        with st.expander("📋 Preview Data", expanded=False):
+            st.dataframe(batch_df.head(), use_container_width=True)
+
+        # BATCH SCORING
+        if st.button("🎯 Score All Borrowers", type="primary", use_container_width=True):
+            with st.spinner("Scoring borrowers..."):
+                results = []
+
+                progress_bar = st.progress(0)
+                status_text = st.empty()
+
+                for idx, row in batch_df.iterrows():
+                    status_text.text(f"Scoring borrower {idx + 1} of {len(batch_df)}...")
+
+                    # Score each borrower
+                    borrower_id = row.get('borrower_id', f'BORROWER_{idx+1}')
+
+                    # Remove non-feature columns (keep default_probability and overall_score for model)
+                    cols_to_remove = ['borrower_id', 'default_label']
+                    features = row.drop([col for col in cols_to_remove if col in row.index], errors='ignore')
+
+                    # Get model's expected features
+                    model_features = model.model.get_booster().feature_names
+
+                    # Prepare feature vector with all required features
+                    X = pd.DataFrame([features[model_features] if all(f in features.index for f in model_features) else {f: 0 for f in model_features}])
+
+                    # Ensure all model features are present
+                    for col in model_features:
+                        if col not in X.columns:
+                            X[col] = 0.0
+                        # Handle missing values from CSV
+                        if col in features.index:
+                            X[col] = features[col]
+
+                    # Reorder columns to match model expectations
+                    X = X[model_features]
+
+                    # Convert to numeric (handle string columns from CSV)
+                    X = X.apply(pd.to_numeric, errors='coerce').fillna(0)
+
+                    # Get predictions
+                    score_prob = model.predict_proba(X)[0, 1]
+                    credit_score = convert_to_credit_score(score_prob)
+                    risk_tier = get_risk_tier(credit_score)
+                    decision = "APPROVED" if credit_score >= 620 else "DECLINED"
+
+                    results.append({
+                        'borrower_id': borrower_id,
+                        'credit_score': credit_score,
+                        'default_probability': score_prob,
+                        'risk_tier': risk_tier,
+                        'decision': decision
+                    })
+
+                    progress_bar.progress((idx + 1) / len(batch_df))
+
+                results_df = pd.DataFrame(results)
+                st.session_state['batch_results'] = results_df
+                status_text.empty()
+                st.success(f"✅ Successfully scored {len(results_df)} borrowers!")
+
+    # SUMMARY STATISTICS
+    if 'batch_results' in st.session_state:
+        results_df = st.session_state['batch_results']
+
+        st.subheader("📈 Summary Statistics")
+
+        col1, col2, col3, col4 = st.columns(4)
+
+        with col1:
+            st.metric("Total Borrowers", len(results_df))
+
+        with col2:
+            approval_rate = (results_df['decision'] == 'APPROVED').mean() * 100
+            st.metric("Approval Rate", f"{approval_rate:.1f}%")
+
+        with col3:
+            avg_score = results_df['credit_score'].mean()
+            st.metric("Average Score", f"{avg_score:.0f}")
+
+        with col4:
+            high_risk_pct = (results_df['risk_tier'].isin(['HIGH', 'MEDIUM'])).mean() * 100
+            st.metric("Elevated Risk %", f"{high_risk_pct:.1f}%")
+
+        # VISUALIZATIONS
+        st.subheader("📈 Portfolio Analysis")
+
+        tab1, tab2, tab3 = st.tabs(["Score Distribution", "Risk Breakdown", "Decision Summary"])
+
+        with tab1:
+            # Score distribution histogram
+            fig_dist = px.histogram(
+                results_df,
+                x='credit_score',
+                nbins=30,
+                title='Credit Score Distribution',
+                labels={'credit_score': 'Credit Score', 'count': 'Number of Borrowers'},
+                color_discrete_sequence=['#1f77b4']
+            )
+            fig_dist.add_vline(x=620, line_dash="dash", line_color="red", annotation_text="Approval Threshold")
+            st.plotly_chart(fig_dist, use_container_width=True)
+
+        with tab2:
+            # Risk tier breakdown
+            risk_counts = results_df['risk_tier'].value_counts()
+            colors = {'EXCELLENT': '#28a745', 'GOOD': '#17a2b8', 'MEDIUM': '#ffc107', 'HIGH': '#dc3545'}
+            fig_risk = px.pie(
+                values=risk_counts.values,
+                names=risk_counts.index,
+                title='Risk Tier Distribution',
+                color=risk_counts.index,
+                color_discrete_map=colors
+            )
+            st.plotly_chart(fig_risk, use_container_width=True)
+
+        with tab3:
+            # Decision breakdown
+            decision_counts = results_df['decision'].value_counts()
+            fig_decision = px.bar(
+                x=decision_counts.index,
+                y=decision_counts.values,
+                title='Approval Decisions',
+                labels={'x': 'Decision', 'y': 'Count'},
+                color=decision_counts.index,
+                color_discrete_map={'APPROVED': '#28a745', 'DECLINED': '#dc3545'}
+            )
+            st.plotly_chart(fig_decision, use_container_width=True)
+
+        # RESULTS TABLE
+        st.subheader("📋 Detailed Results")
+
+        # Format results for display
+        display_df = results_df.copy()
+        display_df['credit_score'] = display_df['credit_score'].round(0).astype(int)
+        display_df['default_probability'] = (display_df['default_probability'] * 100).round(2)
+
+        # Add color coding
+        st.dataframe(
+            display_df,
+            use_container_width=True,
+            column_config={
+                "borrower_id": "Borrower ID",
+                "credit_score": st.column_config.NumberColumn("Credit Score", format="%d"),
+                "default_probability": st.column_config.NumberColumn("Default Risk %", format="%.2f%%"),
+                "risk_tier": "Risk Tier",
+                "decision": st.column_config.TextColumn("Decision", width="small")
+            }
+        )
+
+        # DOWNLOAD OPTIONS
+        st.subheader("⬇️ Download Results")
+
+        col1, col2 = st.columns(2)
+
+        with col1:
+            # CSV download
+            csv = results_df.to_csv(index=False)
+            st.download_button(
+                label="📥 Download Results CSV",
+                data=csv,
+                file_name=f"batch_results_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
+                mime="text/csv",
+                use_container_width=True
+            )
+
+        with col2:
+            # Option for PDF - show button but can implement later
+            st.button(
+                "📄 Generate Batch PDF Report",
+                disabled=True,
+                use_container_width=True,
+                help="Coming soon: Batch PDF report generation"
+            )
 
 
 def render_documentation_page():
